@@ -191,6 +191,9 @@ impl Mailbox {
                     Ok(response.result.unwrap())
                 } else {
                     let error = response.error.unwrap();
+                    if matches!(error.code.as_str(), "mutation_uncertain" | "bridge_halted") {
+                        self.failed = true;
+                    }
                     Err(format!("{}: {}", error.code, error.message))
                 };
             }

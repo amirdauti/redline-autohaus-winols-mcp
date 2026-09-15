@@ -25,4 +25,3 @@ tempfile = "3"
 [profile.release]
 lto = "thin"
 strip = true
-

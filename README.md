@@ -27,7 +27,9 @@ Creation changes map metadata in the active WinOLS project. The server does not 
 
 ## Prerequisites
 
-For the live backend, each user needs Windows, their own licensed WinOLS installation, and EVC's separately purchased **OLS530 Lua plugin**. EVC provides Lua automation for the current project and for scripts that run continuously. This repository does not include EVC software or licenses. See [EVC's Lua product page](https://www.evc.de/en/product/ols/lua.asp) and [OLS530 requirements](https://www.evc.de/en/product/ols/plugins_detail.asp?cksName=OLS530).
+For the live backend, each user needs Windows, their own licensed **WinOLS 5.93 or later** installation, and EVC's separately purchased **OLS530 Lua plugin**. Version 5.93 introduced the element-range query used for bounds checking. EVC provides Lua automation for the current project and for scripts that run continuously. This repository does not include EVC software or licenses. See [EVC's Lua product page](https://www.evc.de/en/product/ols/lua.asp), [OLS530 requirements](https://www.evc.de/en/product/ols/plugins_detail.asp?cksName=OLS530), and [EVC's version history](https://www.evc.de/en/download/down_winols.asp).
+
+The initial live adapter supports a single contiguous project element starting at byte zero, with the current element offset also zero. It rejects multi-element projects and unsupported map layouts. The project must allow reading map structure. See [the native API notes](docs/winols-api.md) for details and the [bridge setup](bridge/README.md) for the export-column configuration and live acceptance checks.
 
 The mock backend runs without WinOLS on Windows and Linux. Its project and map definitions exist only in memory and reset when the server exits.
 
@@ -88,7 +90,7 @@ Keep the mailbox in a local directory writable only by your user, with one serve
 1. Call `winols_get_project` and retain its current `id`.
 2. Pass your definition to `winols_validate_map`.
 3. Call `winols_create_map` with that definition and the retained `expected_project_id`.
-4. Use the returned map ID with `winols_get_map`, then inspect the definition in WinOLS before saving the project yourself.
+4. Use the returned map ID with `winols_get_map`, then [stop the Lua bridge](bridge/README.md#stop-inspect-and-save) before inspecting the definition and saving the project in WinOLS. The polling script occupies WinOLS while it runs.
 
 The project ID check helps detect a project switch between inspection and creation. Stop if the active project changes, then read its identity again. If a creation times out or returns an invalid or mismatched readback, the operation may already have completed in WinOLS. The MCP server stops using that bridge connection, including for reads. Inspect the project directly in WinOLS, stop both the MCP server and Lua bridge, and follow [mailbox recovery](docs/bridge-protocol.md) before restarting and listing maps or retrying creation.
 

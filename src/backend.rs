@@ -1,5 +1,5 @@
 use crate::{
-    domain::{MapDefinition, MapRecord, ProjectInfo},
+    domain::{MapDefinition, MapList, MapRecord, ProjectInfo},
     mailbox::Mailbox,
     mock::MockBackend,
 };
@@ -40,9 +40,12 @@ impl Backend {
                 serde_json::to_value(mock.list_maps(offset, limit)).map_err(|e| e.to_string())
             }
             Self::Winols(bridge) => {
-                bridge
+                let value = bridge
                     .call("list_maps", json!({"offset":offset,"limit":limit}))
-                    .await
+                    .await?;
+                let maps: MapList = serde_json::from_value(value)
+                    .map_err(|e| format!("invalid map list from bridge: {e}"))?;
+                serde_json::to_value(maps).map_err(|e| e.to_string())
             }
         }
     }
@@ -53,7 +56,15 @@ impl Backend {
         }
         match self {
             Self::Mock(mock) => serde_json::to_value(mock.get_map(id)?).map_err(|e| e.to_string()),
-            Self::Winols(bridge) => bridge.call("get_map", json!({"id":id})).await,
+            Self::Winols(bridge) => {
+                let value = bridge.call("get_map", json!({"id":id})).await?;
+                let map: MapRecord = serde_json::from_value(value)
+                    .map_err(|e| format!("invalid map from bridge: {e}"))?;
+                if map.id != id {
+                    return Err("bridge returned a different map ID".into());
+                }
+                serde_json::to_value(map).map_err(|e| e.to_string())
+            }
         }
     }
 
