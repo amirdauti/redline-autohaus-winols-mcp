@@ -25,4 +25,6 @@ Thumbs.db
 request.json
 processing.json
 response.json
+inventory.csv
+client.lock
 *.tmp
