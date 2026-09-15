@@ -1,0 +1,5 @@
+# Merge this table into your Codex config.toml and edit the executable path.
+[mcp_servers.winols_mock]
+command = 'C:\tools\winols-mcp\winols-mcp.exe'
+args = ["--backend", "mock"]
+tool_timeout_sec = 30

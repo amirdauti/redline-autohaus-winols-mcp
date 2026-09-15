@@ -1,0 +1,6 @@
+# Merge this table into your Codex config.toml and edit both absolute paths.
+# Start the Lua bridge inside WinOLS before calling tools.
+[mcp_servers.winols]
+command = 'C:\tools\winols-mcp\winols-mcp.exe'
+args = ["--backend", "winols", "--bridge-dir", 'C:\winols-mcp-mailbox']
+tool_timeout_sec = 30

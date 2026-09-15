@@ -1,0 +1,56 @@
+name: Build Windows release bundle
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install repository Rust toolchain
+        run: rustup show
+      - name: Install Windows x64 target
+        run: rustup target add x86_64-pc-windows-msvc
+      - name: Test
+        run: cargo test --locked --all-targets
+      - name: Build
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+      - name: Package executable, bridge, and documentation
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundle = Join-Path $PWD 'dist/winols-mcp-windows-x64'
+          New-Item -ItemType Directory -Path $bundle -Force | Out-Null
+          Copy-Item -LiteralPath 'target/x86_64-pc-windows-msvc/release/winols-mcp.exe' -Destination $bundle
+          Copy-Item -LiteralPath 'README.md', 'CONTRIBUTING.md', 'LICENSE' -Destination $bundle
+          Copy-Item -LiteralPath 'bridge', 'examples' -Destination $bundle -Recurse
+          if (Test-Path -LiteralPath 'docs') {
+            Copy-Item -LiteralPath 'docs' -Destination $bundle -Recurse
+          }
+          $archive = Join-Path $PWD 'dist/winols-mcp-windows-x64.zip'
+          Compress-Archive -LiteralPath $bundle -DestinationPath $archive
+          $digest = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest  winols-mcp-windows-x64.zip" | Set-Content -LiteralPath 'dist/SHA256SUMS.txt' -Encoding ascii
+          $env:GITHUB_SHA | Set-Content -LiteralPath 'dist/COMMIT.txt' -Encoding ascii
+      - name: Upload release bundle for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: winols-mcp-windows-x64
+          path: |
+            dist/winols-mcp-windows-x64.zip
+            dist/SHA256SUMS.txt
+            dist/COMMIT.txt
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,28 @@
+/target/
+/dist/
+/.bridge/
+/.idea/
+/.vscode/
+*.log
+*.pdb
+.DS_Store
+Thumbs.db
+
+# Local configuration and proprietary project data are not public fixtures.
+.env
+.env.*
+!.env.example
+*.ols
+*.olsx
+*.bin
+*.hex
+*.a2l
+*.dam
+*.damos
+*.kp
+
+# Mailbox files may contain local project metadata.
+request.json
+processing.json
+response.json
+*.tmp
