@@ -153,7 +153,7 @@ fn minimal_definition() -> Value {
 }
 
 #[tokio::test]
-async fn executable_negotiates_mcp_and_advertises_six_tools_with_schemas_and_annotations() {
+async fn executable_negotiates_mcp_and_advertises_seven_tools_with_schemas_and_annotations() {
     let mut client = Client::start().await;
     let listed = client.rpc("tools/list", json!({})).await;
     assert!(listed.get("error").is_none(), "{listed}");
@@ -170,6 +170,7 @@ async fn executable_negotiates_mcp_and_advertises_six_tools_with_schemas_and_ann
             "winols_get_map",
             "winols_get_project",
             "winols_list_maps",
+            "winols_read_bytes",
             "winols_status",
             "winols_validate_map"
         ]
@@ -188,11 +189,103 @@ async fn executable_negotiates_mcp_and_advertises_six_tools_with_schemas_and_ann
         } else {
             assert_eq!(tool["annotations"]["readOnlyHint"], true, "{tool}");
         }
+        if tool["name"] == "winols_read_bytes" {
+            assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+            let required = tool["inputSchema"]["required"].as_array().unwrap();
+            for field in ["expected_project_id", "address", "count"] {
+                assert!(required.contains(&json!(field)));
+            }
+            assert_eq!(
+                tool["inputSchema"]["properties"]["count"]["minimum"].as_f64(),
+                Some(1.0)
+            );
+            assert_eq!(
+                tool["inputSchema"]["properties"]["count"]["maximum"].as_f64(),
+                Some(4096.0)
+            );
+        }
     }
     let status = client.call("winols_status", json!({})).await;
     assert_eq!(status["backend"], "mock");
     assert_eq!(status["connected"], true);
     assert_eq!(status["persistent"], false);
+    client.close().await;
+}
+
+#[tokio::test]
+async fn byte_reads_report_both_versions_and_reject_bad_ranges_without_changes() {
+    let mut client = Client::start().await;
+    let project = client.call("winols_get_project", json!({})).await;
+    let read = client
+        .call(
+            "winols_read_bytes",
+            json!({"expected_project_id": project["id"], "address": 254, "count": 4}),
+        )
+        .await;
+    assert_eq!(read["project_id"], project["id"]);
+    assert_eq!(read["address"], 254);
+    assert_eq!(read["window_id"], "1");
+    assert_eq!(read["version_name"], "Synthetic selected version (mock)");
+    assert_eq!(read["original_bytes"], json!([254, 255, 0, 1]));
+    assert_eq!(read["current_bytes"], json!([126, 127, 128, 129]));
+    let size = project["size_bytes"].as_u64().unwrap();
+    let last = client
+        .call(
+            "winols_read_bytes",
+            json!({"expected_project_id": project["id"], "address": size - 1, "count": 1}),
+        )
+        .await;
+    assert_eq!(last["original_bytes"], json!([255]));
+    assert_eq!(last["current_bytes"], json!([127]));
+    let largest = client
+        .call(
+            "winols_read_bytes",
+            json!({"expected_project_id": project["id"], "address": 0, "count": 4096}),
+        )
+        .await;
+    assert_eq!(largest["original_bytes"].as_array().unwrap().len(), 4096);
+    assert_eq!(largest["current_bytes"].as_array().unwrap().len(), 4096);
+
+    for (address, count, expected) in [
+        (0, 0, "count must be between"),
+        (0, 4097, "count must be between"),
+        (size, 1, "exceeds project size"),
+        (size - 1, 2, "exceeds project size"),
+        (u64::MAX, 1, "overflow"),
+    ] {
+        client
+            .tool_error(
+                "winols_read_bytes",
+                json!({"expected_project_id": project["id"], "address": address, "count": count}),
+                expected,
+            )
+            .await;
+    }
+    client
+        .tool_error(
+            "winols_read_bytes",
+            json!({"expected_project_id": "stale-project", "address": 0, "count": 1}),
+            "active project changed",
+        )
+        .await;
+    for arguments in [
+        json!({"expected_project_id": project["id"], "address": 0, "count": 1, "write": true}),
+        json!({"expected_project_id": project["id"], "address": 0}),
+        json!({"expected_project_id": project["id"], "address": -1, "count": 1}),
+    ] {
+        let response = client.call_raw("winols_read_bytes", arguments).await;
+        assert_eq!(response["result"]["isError"], true, "{response}");
+    }
+    assert_eq!(client.call("winols_get_project", json!({})).await, project);
+    assert_eq!(
+        client
+            .call(
+                "winols_read_bytes",
+                json!({"expected_project_id": project["id"], "address": 254, "count": 4}),
+            )
+            .await,
+        read
+    );
     client.close().await;
 }
 

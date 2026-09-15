@@ -2,7 +2,7 @@
 
 A Rust [Model Context Protocol](https://modelcontextprotocol.io/) server that lets Codex and other MCP clients inspect and create map definitions in WinOLS through a Lua bridge.
 
-**Status: initial implementation.** The mock backend supports development without WinOLS. The live bridge needs acceptance testing inside a licensed WinOLS installation; no WinOLS version is currently certified by this project.
+**Status: initial implementation.** The mock backend supports development without WinOLS. Two 2D map definitions were created and read back through the live tools on WinOLS 5.93.01 with OLS530 3.006, with original/current byte checks; full live acceptance remains incomplete. No WinOLS version is currently certified by this project. See [the verification scope](docs/winols-api.md#what-is-verified).
 
 ```text
 Codex / MCP client -- stdio --> winols-mcp -- local files --> Lua bridge in WinOLS
@@ -16,6 +16,7 @@ Codex / MCP client -- stdio --> winols-mcp -- local files --> Lua bridge in WinO
 | --- | --- |
 | `winols_status` | Check the selected backend and connection. |
 | `winols_get_project` | Read the active project's identity, binary size, and map count. |
+| `winols_read_bytes` | Read 1–4096 original and current bytes using `expected_project_id`, `address`, and `count`. |
 | `winols_list_maps` | List definitions with `offset` and `limit` pagination. |
 | `winols_get_map` | Read a definition by its `id`. |
 | `winols_validate_map` | Check a proposed `definition` against the current project. |
@@ -24,6 +25,8 @@ Codex / MCP client -- stdio --> winols-mcp -- local files --> Lua bridge in WinO
 Definitions describe contiguous maps with integer storage, byte order, dimensions, scaling, units, and optional X/Y axes. Addresses are zero-based **byte offsets** within the project binary. Scaling uses `physical = raw * factor + offset`; X length follows columns and Y length follows rows.
 
 Creation changes map metadata in the active WinOLS project. The server does not save the project, identify maps automatically, change firmware bytes, or flash an ECU. Validate proposed addresses and scaling against your own source data before creating definitions.
+
+Potential-map shapes and raw values do not establish a map's purpose. Keep candidate definitions unclassified, with raw scaling, until evidence validates their meaning, axes, units, and conversion.
 
 ## Prerequisites
 
@@ -85,6 +88,12 @@ An equivalent config is in [examples/codex-winols.toml](examples/codex-winols.to
 
 Keep the mailbox in a local directory writable only by your user, with one server and one bridge using it. The bridge processes requests with the permissions of WinOLS. Project metadata returned through MCP becomes available to your MCP client.
 
+### Reading binary bytes
+
+Call `winols_get_project`, then pass its `id` as `expected_project_id` to `winols_read_bytes` with a zero-based byte `address` and `count` from 1 through 4096. The entire range must fit the project. The response includes `project_id`, `address`, `window_id` (a decimal string), `version_name`, and equally sized `original_bytes` and `current_bytes` arrays of integers from 0 through 255. The adapter passes EVC's numeric Boolean constants to select the two sources; see [the native API notes](docs/winols-api.md#native-boolean-arguments).
+
+The bridge checks the observed project, active window, and version name before and after reading. These fields describe the observed context; they are not a unique version identifier or a revision lock. The live adapter retains its single-element, byte-zero restriction. Returned firmware bytes become available to the MCP client, so select only the range needed for inspection.
+
 ### Creating a definition
 
 1. Call `winols_get_project` and retain its current `id`.
@@ -93,6 +102,8 @@ Keep the mailbox in a local directory writable only by your user, with one serve
 4. Use the returned map ID with `winols_get_map`, then [stop the Lua bridge](bridge/README.md#stop-inspect-and-save) before inspecting the definition and saving the project in WinOLS. The polling script occupies WinOLS while it runs.
 
 The project ID check helps detect a project switch between inspection and creation. Stop if the active project changes, then read its identity again. If a creation times out or returns an invalid or mismatched readback, the operation may already have completed in WinOLS. The MCP server stops using that bridge connection, including for reads. Inspect the project directly in WinOLS, stop both the MCP server and Lua bridge, and follow [mailbox recovery](docs/bridge-protocol.md) before restarting and listing maps or retrying creation.
+
+The CSV inventory and reported map count cover exported definitions, not every project window. An interrupted creation can leave an unconfigured `Hexdump` entry that the CSV omits. Inspect the WinOLS map/window list during recovery; a matching map count alone does not prove that no partial window remains.
 
 ## Troubleshooting
 

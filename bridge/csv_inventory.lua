@@ -1,6 +1,23 @@
 -- Read only addresses from WinOLS CSV; get complete definitions through the native getters.
 -- The address-column name and delimiter must match a locally inspected WinOLS export.
 local csv = {}
+local function parse_address(address)
+  local digits, base, maximum
+  if address:match("^[0-9]+$") then
+    digits, base, maximum = address, 10, "9007199254740991"
+  elseif address:match("^%$[0-9A-Fa-f]+$") then
+    digits, base, maximum = address:sub(2):upper(), 16, "1FFFFFFFFFFFFF"
+  else
+    error("CSV map address must be unsigned decimal or $-prefixed hexadecimal", 0)
+  end
+  digits = digits:gsub("^0+", "")
+  if digits == "" then return 0 end
+  -- Check digits before conversion to prevent rounding or integer-parser overflow.
+  if #digits > #maximum or (#digits == #maximum and digits > maximum) then
+    error("CSV address exceeds exact numeric range", 0)
+  end
+  return assert(tonumber(digits, base))
+end
 function csv.parse(input, delimiter, address_column)
   assert(type(input) == "string" and #input <= 16777216, "CSV exceeds 16 MiB")
   assert(delimiter == "," or delimiter == ";" or delimiter == "\t", "CSV delimiter must be comma, semicolon, or tab")
@@ -51,12 +68,8 @@ function csv.parse(input, delimiter, address_column)
   for index = 2, #rows do
     local cells = rows[index]
     if #cells ~= #rows[1] then error("CSV row has the wrong number of columns", 0) end
-    local address = cells[column]
-    -- The EVC help explicitly specifies project-relative decimal CSV addresses.
-    if not address:match("^%d+$") then error("CSV map address is not an unsigned decimal byte offset", 0) end
-    local value = tonumber(address)
-    if not value or value > 9007199254740991 then error("CSV address exceeds exact numeric range", 0) end
-    addresses[#addresses + 1] = value
+    -- EVC documents decimal offsets; native exports also use $-prefixed hexadecimal.
+    addresses[#addresses + 1] = parse_address(cells[column])
   end
   return addresses
 end

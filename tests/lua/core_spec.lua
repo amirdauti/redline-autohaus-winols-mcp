@@ -179,6 +179,21 @@ run("exact end-of-project address is accepted", function()
   untouched(state, 1)
 end)
 
+run("EVC numeric Boolean constants are verified before any creation", function()
+  for _, replacement in ipairs({
+    {"TRUE", true}, {"FALSE", false}, {"TRUE", "1"}, {"FALSE", "0"},
+    {"TRUE", 2}, {"FALSE", 1}, {"TRUE"}, {"FALSE"},
+  }) do
+    local core, state, api = fixture()
+    local project = success(core, "get_project")
+    api[replacement[1]] = replacement[2]
+    local r = failure(core, "create_map", { expected_project_id=project.id, definition=definition() })
+    assert(r.code == "unsupported_winols")
+    assert(state.adds == 0 and state.sets == 0 and state.deletes == 0)
+    untouched(state)
+  end
+end)
+
 run("duplicate names and addresses do not alter existing maps", function()
   local core, state = fixture()
   local project = success(core, "get_project")

@@ -1,6 +1,9 @@
 //! Deterministic, in-memory backend for development without a WinOLS license.
 
-use crate::domain::{MAX_MAPS, MAX_PAGE_SIZE, MapDefinition, MapList, MapRecord, ProjectInfo};
+use crate::domain::{
+    ByteRead, MAX_MAPS, MAX_PAGE_SIZE, MapDefinition, MapList, MapRecord, ProjectInfo,
+    validate_byte_read_request,
+};
 
 pub const MOCK_PROJECT_ID: &str = "mock-project";
 pub const MOCK_PROJECT_SIZE: u64 = 1024 * 1024;
@@ -44,6 +47,36 @@ impl MockBackend {
             .find(|map| map.id == id)
             .cloned()
             .ok_or_else(|| format!("map not found: {id}"))
+    }
+
+    /// Synthetic bytes: the original repeats 0..255; the selected version flips bit 7.
+    pub fn read_bytes(
+        &self,
+        expected_project_id: &str,
+        address: u64,
+        count: u32,
+    ) -> Result<ByteRead, String> {
+        let end = validate_byte_read_request(expected_project_id, address, count)?;
+        if expected_project_id != MOCK_PROJECT_ID {
+            return Err(
+                "active project changed; get the project again before reading bytes".into(),
+            );
+        }
+        if end > MOCK_PROJECT_SIZE {
+            return Err(format!(
+                "byte read range [{address}, {end}) exceeds project size {MOCK_PROJECT_SIZE}"
+            ));
+        }
+        let original_bytes: Vec<u8> = (address..end).map(|offset| (offset % 256) as u8).collect();
+        let current_bytes = original_bytes.iter().map(|byte| byte ^ 0x80).collect();
+        Ok(ByteRead {
+            project_id: MOCK_PROJECT_ID.into(),
+            address,
+            window_id: "1".into(),
+            version_name: "Synthetic selected version (mock)".into(),
+            original_bytes,
+            current_bytes,
+        })
     }
 
     /// Validate all input and the expected project before creating a definition.
@@ -110,6 +143,28 @@ mod tests {
                 unit: "rpm".into(),
             }),
             y_axis: None,
+        }
+    }
+
+    #[test]
+    fn synthetic_byte_reads_are_consistent_across_overlapping_ranges() {
+        let backend = MockBackend::new();
+        let whole = backend.read_bytes(MOCK_PROJECT_ID, 250, 20).unwrap();
+        let middle = backend.read_bytes(MOCK_PROJECT_ID, 254, 4).unwrap();
+        assert_eq!(middle.original_bytes, whole.original_bytes[4..8]);
+        assert_eq!(middle.current_bytes, whole.current_bytes[4..8]);
+        assert_ne!(middle.original_bytes, middle.current_bytes);
+        assert_eq!(middle.current_bytes, [126, 127, 128, 129]);
+        assert!(whole.version_name.contains("Synthetic"));
+        assert_eq!(backend.project().map_count, 0);
+        for (project, address, count) in [
+            ("stale-project", 0, 1),
+            (MOCK_PROJECT_ID, 0, 0),
+            (MOCK_PROJECT_ID, 0, 4097),
+            (MOCK_PROJECT_ID, MOCK_PROJECT_SIZE, 1),
+            (MOCK_PROJECT_ID, u64::MAX, 1),
+        ] {
+            assert!(backend.read_bytes(project, address, count).is_err());
         }
     }
 
