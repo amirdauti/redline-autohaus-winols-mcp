@@ -1,5 +1,7 @@
 use crate::{
-    domain::{MapDefinition, MapList, MapRecord, ProjectInfo},
+    domain::{
+        ByteRead, MapDefinition, MapList, MapRecord, ProjectInfo, validate_byte_read_request,
+    },
     mailbox::Mailbox,
     mock::MockBackend,
 };
@@ -68,6 +70,42 @@ impl Backend {
         }
     }
 
+    pub async fn read_bytes(
+        &mut self,
+        expected_project_id: &str,
+        address: u64,
+        count: u32,
+    ) -> Result<ByteRead, String> {
+        let end = validate_byte_read_request(expected_project_id, address, count)?;
+        let project = self.project().await?;
+        if project.id != expected_project_id {
+            return Err(
+                "active project changed; get the project again before reading bytes".into(),
+            );
+        }
+        if end > project.size_bytes {
+            return Err(format!(
+                "byte read range [{address}, {end}) exceeds project size {}",
+                project.size_bytes
+            ));
+        }
+        let bytes = match self {
+            Self::Mock(mock) => mock.read_bytes(expected_project_id, address, count)?,
+            Self::Winols(bridge) => {
+                let value = bridge
+                    .call(
+                        "read_bytes",
+                        json!({"expected_project_id":expected_project_id,"address":address,"count":count}),
+                    )
+                    .await?;
+                serde_json::from_value::<ByteRead>(value)
+                    .map_err(|error| format!("invalid byte response from bridge: {error}"))?
+            }
+        };
+        bytes.validate(expected_project_id, address, count)?;
+        Ok(bytes)
+    }
+
     pub async fn validate_map(&mut self, definition: &MapDefinition) -> Result<Value, String> {
         let project = self.project().await?;
         definition.validate(project.size_bytes)?;
@@ -127,7 +165,7 @@ mod tests {
     use std::{path::Path, time::Duration};
     use tokio::fs;
 
-    async fn respond(directory: &Path, operation: &str, result: Value) {
+    async fn respond(directory: &Path, operation: &str, result: Value) -> Value {
         let request_path = directory.join("request.json");
         tokio::time::timeout(Duration::from_secs(3), async {
             while !request_path.exists() {
@@ -155,6 +193,119 @@ mod tests {
         fs::rename(&temporary, directory.join("response.json"))
             .await
             .unwrap();
+        request
+    }
+
+    #[tokio::test]
+    async fn invalid_byte_inputs_do_not_publish_a_native_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut backend =
+            Backend::Winols(Mailbox::open(directory.path(), Duration::from_secs(3)).unwrap());
+        for (project, address, count, expected) in [
+            ("project-1", 0, 0, "count must be between"),
+            ("project-1", 0, 4097, "count must be between"),
+            ("project-1", u64::MAX, 1, "overflow"),
+            ("", 0, 1, "must not be empty"),
+            ("project\n1", 0, 1, "control characters"),
+        ] {
+            let error = backend
+                .read_bytes(project, address, count)
+                .await
+                .unwrap_err();
+            assert!(error.contains(expected), "{error}");
+            assert!(!directory.path().join("request.json").exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn byte_reads_check_project_identity_and_bounds_before_native_byte_access() {
+        for (project, address, count, expected) in [
+            ("stale-project", 0, 1, "active project changed"),
+            ("project-1", 1024, 1, "exceeds project size"),
+            ("project-1", 1023, 2, "exceeds project size"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut backend =
+                Backend::Winols(Mailbox::open(directory.path(), Duration::from_secs(3)).unwrap());
+            let bridge_directory = directory.path().to_path_buf();
+            let bridge = tokio::spawn(async move {
+                respond(&bridge_directory, "get_project", json!({
+                    "id": "project-1", "name": "Synthetic project", "size_bytes": 1024, "map_count": 0
+                })).await;
+            });
+            let error = backend
+                .read_bytes(project, address, count)
+                .await
+                .unwrap_err();
+            assert!(error.contains(expected), "{error}");
+            bridge.await.unwrap();
+            assert!(!directory.path().join("request.json").exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn byte_reads_validate_native_response_identity_shape_and_metadata() {
+        let valid = json!({
+            "project_id": "project-1", "address": 1022, "window_id": "12345",
+            "version_name": "Synthetic selected version", "original_bytes": [0, 255],
+            "current_bytes": [128, 127]
+        });
+        let mut cases = vec![(valid.clone(), None)];
+        for (field, replacement, error) in [
+            ("project_id", json!("other-project"), "different project ID"),
+            ("address", json!(0), "different address"),
+            ("original_bytes", json!([0]), "lengths differ"),
+            ("current_bytes", json!([0]), "lengths differ"),
+            ("current_bytes", json!([0, 1, 2]), "lengths differ"),
+            ("original_bytes", json!([0, 256]), "invalid byte response"),
+            ("current_bytes", json!([0, 256]), "invalid byte response"),
+            ("current_bytes", json!([-1, 0]), "invalid byte response"),
+            ("window_id", json!(""), "window_id"),
+            ("window_id", json!("１２"), "window_id"),
+            ("window_id", json!("-1"), "window_id"),
+            ("window_id", json!("1".repeat(65)), "window_id"),
+            ("version_name", json!("name\n"), "control characters"),
+            ("version_name", json!("x".repeat(257)), "256 characters"),
+            ("unexpected", json!(true), "invalid byte response"),
+        ] {
+            let mut changed = valid.clone();
+            changed[field] = replacement;
+            cases.push((changed, Some(error)));
+        }
+        let mut current_only = valid.clone();
+        current_only
+            .as_object_mut()
+            .unwrap()
+            .remove("original_bytes");
+        cases.push((current_only, Some("missing field")));
+        for (read_result, expected_error) in cases {
+            let directory = tempfile::tempdir().unwrap();
+            let mut backend =
+                Backend::Winols(Mailbox::open(directory.path(), Duration::from_secs(3)).unwrap());
+            let bridge_directory = directory.path().to_path_buf();
+            let bridge = tokio::spawn(async move {
+                respond(&bridge_directory, "get_project", json!({
+                    "id": "project-1", "name": "Synthetic project", "size_bytes": 1024, "map_count": 0
+                })).await;
+                let request = respond(&bridge_directory, "read_bytes", read_result).await;
+                assert_eq!(
+                    request["params"],
+                    json!({
+                        "expected_project_id": "project-1", "address": 1022, "count": 2
+                    })
+                );
+            });
+            let result = backend.read_bytes("project-1", 1022, 2).await;
+            if let Some(expected) = expected_error {
+                let error = result.unwrap_err();
+                assert!(error.contains(expected), "{error}");
+            } else {
+                let bytes = result.unwrap();
+                assert_eq!(bytes.original_bytes, [0, 255]);
+                assert_eq!(bytes.current_bytes, [128, 127]);
+            }
+            bridge.await.unwrap();
+        }
     }
 
     #[tokio::test]

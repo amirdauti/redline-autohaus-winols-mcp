@@ -7,6 +7,7 @@ pub const MAX_DIMENSION: u32 = 4096;
 pub const MAX_MAP_ELEMENTS: u64 = 1_048_576;
 pub const MAX_PAGE_SIZE: u32 = 100;
 pub const MAX_MAPS: usize = 10_000;
+pub const MAX_READ_BYTES: u32 = 4096;
 
 fn default_factor() -> f64 {
     1.0
@@ -181,6 +182,59 @@ pub struct ProjectInfo {
     pub name: String,
     pub size_bytes: u64,
     pub map_count: u32,
+}
+
+/// Original and selected-version bytes from the same project window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ByteRead {
+    pub project_id: String,
+    pub address: u64,
+    pub window_id: String,
+    pub version_name: String,
+    pub original_bytes: Vec<u8>,
+    pub current_bytes: Vec<u8>,
+}
+
+pub(crate) fn validate_byte_read_request(
+    expected_project_id: &str,
+    address: u64,
+    count: u32,
+) -> Result<u64, String> {
+    validate_text("expected_project_id", expected_project_id, 4096, true)?;
+    if !(1..=MAX_READ_BYTES).contains(&count) {
+        return Err(format!("count must be between 1 and {MAX_READ_BYTES}"));
+    }
+    address
+        .checked_add(u64::from(count))
+        .ok_or_else(|| "byte read address range overflow".into())
+}
+
+impl ByteRead {
+    pub(crate) fn validate(
+        &self,
+        expected_project_id: &str,
+        address: u64,
+        count: u32,
+    ) -> Result<(), String> {
+        if self.project_id != expected_project_id {
+            return Err("byte response contains a different project ID".into());
+        }
+        if self.address != address {
+            return Err("byte response contains a different address".into());
+        }
+        if self.original_bytes.len() != count as usize || self.current_bytes.len() != count as usize
+        {
+            return Err("byte response lengths differ from the requested count".into());
+        }
+        if self.window_id.is_empty()
+            || self.window_id.len() > 64
+            || !self.window_id.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err("byte response window_id must contain 1 to 64 ASCII digits".into());
+        }
+        validate_text("byte response version_name", &self.version_name, 256, false)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

@@ -85,6 +85,12 @@ function core.new(api, options)
     if type(api[name]) ~= "number" then fail("unsupported_winols", "WinOLS constant unavailable: " .. name) end
     return api[name]
   end
+  local function native_flags()
+    -- EVC native bool parameters require numeric TRUE/FALSE, not Lua booleans.
+    local yes, no = constant("TRUE"), constant("FALSE")
+    if yes ~= 1 or no ~= 0 then fail("unsupported_winols", "WinOLS TRUE/FALSE constants must equal 1/0") end
+    return yes, no
+  end
   local function enum(value, name) return value == name or tonumber(value) == constant(name) end
   local function number(value, label)
     if type(value) == "string" then
@@ -102,13 +108,14 @@ function core.new(api, options)
   end
   local function project()
     local filename = invoke("projectGetProperty", constant("ePrjFilename"))
-    -- The default iOrgVer=0 selects the original, independent of the selected version.
+    -- Default iOrgVer=0 matched the original in a live probe; see docs/winols-api.md for the selector caveat.
     local hash = invoke("projectGetProperty", constant("ePrjPropChecksumSHA256"))
     if type(filename) ~= "string" or filename == "" then fail("no_project", "Open and save a project before starting the bridge") end
     if type(hash) ~= "string" or #hash ~= 64 or not hash:match("^%x+$") then
       fail("unsupported_project", "Original SHA-256 is unavailable; cannot establish project identity")
     end
-    local ranges = invoke("projectGetElementRanges", false, false)
+    local _, native_false = native_flags()
+    local ranges = invoke("projectGetElementRanges", native_false, native_false)
     if type(ranges) ~= "string" then fail("unsupported_project", "Element ranges unavailable (WinOLS 5.93 required)") end
     local first, last = ranges:match("^[^:;]+:%s*(%d+)%s*%-%s*(%d+)%s*$")
     first, last = tonumber(first), tonumber(last)
@@ -169,6 +176,33 @@ function core.new(api, options)
     if current.id ~= expected then fail("project_changed", "Current project identity changed") end
     return current
   end
+  local function read_bytes(params, current)
+    if params.expected_project_id ~= current.id then fail("project_changed", "expected_project_id does not match the current project") end
+    local address = integer(params.address, 0, MAX_INTEGER, "address")
+    local count = integer(params.count, 1, 4096, "count")
+    if address > current.size_bytes - count then fail("invalid_argument", "Byte read exceeds project size") end
+    local function context()
+      local window = integer(invoke("windowGetActive"), 1, MAX_INTEGER, "active window")
+      local name = text(invoke("versionGetProperty", constant("eVerPropName")), 256, false, "version name")
+      return string.format("%.0f", window), name
+    end
+    local window_id, version_name = context()
+    local native_true, native_false = native_flags()
+    local function read(original)
+      local values = invoke("projectGetAt", address, constant("eByte"), count, original)
+      if count == 1 then values = { values } end
+      if type(values) ~= "table" or #values ~= count then fail("native_error", "WinOLS returned an invalid byte count") end
+      local result = json.array()
+      for index = 1, count do result[index] = integer(values[index], 0, 255, "native byte") end
+      return result
+    end
+    local original_bytes, current_bytes = read(native_true), read(native_false)
+    check_project(current.id)
+    local final_window, final_name = context()
+    if final_window ~= window_id or final_name ~= version_name then fail("version_changed", "Active window or version changed during byte read") end
+    return { project_id=current.id, address=address, window_id=window_id, version_name=version_name,
+      original_bytes=original_bytes, current_bytes=current_bytes }
+  end
   local function created_map(request, params, current, maps)
     local wanted = definition(params.definition, current.size_bytes)
     if params.expected_project_id ~= current.id then fail("project_changed", "expected_project_id does not match the current project") end
@@ -183,6 +217,7 @@ function core.new(api, options)
     local existing = invoke("projectFindMap", "Name", marker, -1)
     if type(existing) ~= "table" or #existing ~= 0 then fail("marker_conflict", "Cannot establish a unique temporary map name") end
     -- Resolve all constants before the first mutation.
+    local native_true = native_flags()
     for _, name in ipairs({ "eEinzel", "eEindim", "eZweidim", "eViewText", "eDataSrcNone", "eRom" }) do constant(name) end
     for _, typ in pairs(types) do constant(typ[1]) end
     if now() >= request.expires_at then fail("expired_request", "Request expired before mutation") end
@@ -190,7 +225,7 @@ function core.new(api, options)
     if now() >= request.expires_at then fail("expired_request", "Request expired during project verification") end
     local added, named = false, false
     local function set(key, value)
-      local rc = invoke("windowSetMapProperties", key, value, true)
+      local rc = invoke("windowSetMapProperties", key, value, native_true)
       if rc ~= true and rc ~= 1 then fail("native_error", "WinOLS rejected map property " .. key) end
     end
     local ok, result = pcall(function()
@@ -275,7 +310,8 @@ function core.new(api, options)
       if self.seen_count >= 10000 then self.halted = true; fail("bridge_halted", "Session request limit reached; restart bridge and client") end
       self.seen[id], self.seen_count = true, self.seen_count + 1
       local operation, params = request.operation, request.params
-      local allowed = { get_status={}, get_project={}, list_maps={offset=true,limit=true}, get_map={id=true}, create_map={expected_project_id=true,definition=true} }
+      local allowed = { get_status={}, get_project={}, list_maps={offset=true,limit=true}, get_map={id=true},
+        read_bytes={expected_project_id=true,address=true,count=true}, create_map={expected_project_id=true,definition=true} }
       if type(operation) ~= "string" or not allowed[operation] then fail("unknown_operation", "Unsupported bridge operation") end
       fields(params, allowed[operation], "params")
       if operation == "get_status" then
@@ -284,6 +320,7 @@ function core.new(api, options)
           live_verified=false, project_scope="single-element byte-zero", autosave=false }
       end
       local current = project()
+      if operation == "read_bytes" then return read_bytes(params, current) end
       local maps = inventory(current.size_bytes)
       check_project(current.id)
       if operation == "get_project" then current.map_count = #maps; return current end

@@ -34,6 +34,18 @@ pub struct GetMapParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ReadBytesParams {
+    /// Project ID returned by winols_get_project.
+    pub expected_project_id: String,
+    /// Zero-based byte offset in the project binary.
+    pub address: u64,
+    /// Number of bytes to read, from 1 through 4096.
+    #[schemars(range(min = 1, max = 4096))]
+    pub count: u32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ValidateMapParams {
     pub definition: MapDefinition,
 }
@@ -108,6 +120,22 @@ impl WinolsServer {
     )]
     async fn get_map(&self, Parameters(params): Parameters<GetMapParams>) -> CallToolResult {
         result(self.backend.lock().await.get_map(&params.id).await)
+    }
+
+    #[tool(
+        name = "winols_read_bytes",
+        description = "Read 1 to 4096 bytes from the original and selected version of the current project without changing either. Requires expected_project_id from winols_get_project and a zero-based byte address. Returns original_bytes, current_bytes, the window ID, and version name; this does not identify map meaning.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn read_bytes(&self, Parameters(params): Parameters<ReadBytesParams>) -> CallToolResult {
+        result(
+            self.backend
+                .lock()
+                .await
+                .read_bytes(&params.expected_project_id, params.address, params.count)
+                .await
+                .and_then(|bytes| serde_json::to_value(bytes).map_err(|error| error.to_string())),
+        )
     }
 
     #[tool(

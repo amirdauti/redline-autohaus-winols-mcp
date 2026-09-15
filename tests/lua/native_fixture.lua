@@ -29,6 +29,7 @@ local function fixture()
     ranges = "Synthetic / Eprom:0-1048575", element_offset = 0,
   }
   local api = {}
+  api.TRUE, api.FALSE = 1, 0
   for index, name in ipairs({
     "ePrjFilename", "ePrjPropChecksumSHA256", "eWinOLSMajor", "eWinOLSMinor",
     "eByte", "eLoHi", "eHiLo", "eLoHiLoHi", "eHiLoHiLo",
@@ -48,7 +49,7 @@ local function fixture()
     return state.hash
   end
   function api.projectGetElementRanges(ecu, long_format)
-    assert(ecu == false and long_format == false, "element ranges must use decimal short addresses")
+    assert(ecu == 0 and long_format == 0, "element ranges require EVC numeric FALSE, not Lua booleans")
     return state.ranges
   end
   function api.projectGetElementOffset() return state.element_offset end
@@ -60,7 +61,7 @@ local function fixture()
     return true
   end
   function api.windowSetMapProperties(key, value, last_new)
-    assert(last_new == true, "creation must target the last Lua-created map explicitly")
+    assert(last_new == 1, "creation requires EVC numeric TRUE, not a Lua boolean, for the last Lua-created map")
     assert(state.last_created, "no newly created map for setter")
     state.sets = state.sets + 1
     if key == state.fail_property then return false end
