@@ -90,7 +90,7 @@ Keep the mailbox in a local directory writable only by your user, with one serve
 1. Call `winols_get_project` and retain its current `id`.
 2. Pass your definition to `winols_validate_map`.
 3. Call `winols_create_map` with that definition and the retained `expected_project_id`.
-4. Use the returned map ID with `winols_get_map`, then inspect the definition in WinOLS before saving the project yourself.
+4. Use the returned map ID with `winols_get_map`, then [stop the Lua bridge](bridge/README.md#stop-inspect-and-save) before inspecting the definition and saving the project in WinOLS. The polling script occupies WinOLS while it runs.
 
 The project ID check helps detect a project switch between inspection and creation. Stop if the active project changes, then read its identity again. If a creation times out or returns an invalid or mismatched readback, the operation may already have completed in WinOLS. The MCP server stops using that bridge connection, including for reads. Inspect the project directly in WinOLS, stop both the MCP server and Lua bridge, and follow [mailbox recovery](docs/bridge-protocol.md) before restarting and listing maps or retrying creation.
 
