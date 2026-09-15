@@ -27,7 +27,9 @@ Creation changes map metadata in the active WinOLS project. The server does not 
 
 ## Prerequisites
 
-For the live backend, each user needs Windows, their own licensed WinOLS installation, and EVC's separately purchased **OLS530 Lua plugin**. EVC provides Lua automation for the current project and for scripts that run continuously. This repository does not include EVC software or licenses. See [EVC's Lua product page](https://www.evc.de/en/product/ols/lua.asp) and [OLS530 requirements](https://www.evc.de/en/product/ols/plugins_detail.asp?cksName=OLS530).
+For the live backend, each user needs Windows, their own licensed **WinOLS 5.93 or later** installation, and EVC's separately purchased **OLS530 Lua plugin**. Version 5.93 introduced the element-range query used for bounds checking. EVC provides Lua automation for the current project and for scripts that run continuously. This repository does not include EVC software or licenses. See [EVC's Lua product page](https://www.evc.de/en/product/ols/lua.asp), [OLS530 requirements](https://www.evc.de/en/product/ols/plugins_detail.asp?cksName=OLS530), and [EVC's version history](https://www.evc.de/en/download/down_winols.asp).
+
+The initial live adapter supports a single contiguous project element starting at byte zero, with the current element offset also zero. It rejects multi-element projects and unsupported map layouts. The project must allow reading map structure. See [the native API notes](docs/winols-api.md) for details and the [bridge setup](bridge/README.md) for the export-column configuration and live acceptance checks.
 
 The mock backend runs without WinOLS on Windows and Linux. Its project and map definitions exist only in memory and reset when the server exits.
 
